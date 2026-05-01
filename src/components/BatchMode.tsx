@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { useWorkspaceStore } from '../store/workspaceStore';
-import { Download, Play, Square, List, Timer } from 'lucide-react';
+import { Download, Play, Square, List, Timer, Upload, FileAudio, Folder, FileArchive } from 'lucide-react';
 import JSZip from 'jszip';
 import { generateAudio, generateCaptions } from '../services/aiService';
 
@@ -81,7 +81,7 @@ export function BatchMode() {
     store.setBatchProcessingState({ isBatchProcessingAudio: false, batchStopRequested: false });
   };
 
-  const handleStartVtt = async () => {
+  const handleStartVtt = async (forceRerun: boolean = false) => {
     store.setBatchProcessingState({ isBatchProcessingVtt: true, batchStopRequested: false });
     
     const items = useWorkspaceStore.getState().batchItems;
@@ -91,7 +91,7 @@ export function BatchMode() {
         
         const item = items[i];
         if (!item.wavBlob) continue;
-        if (item.vttStatus === 'done') continue;
+        if (item.vttStatus === 'done' && !forceRerun) continue;
 
         await checkAndApplyCooldown(5);
         if (useWorkspaceStore.getState().batchStopRequested) break;
@@ -103,12 +103,19 @@ export function BatchMode() {
             const generatePromise = generateCaptions(item.wavBlob, currentStore.apiKey, currentStore.captionModel);
             let timeoutId: any;
             const timeoutPromise = new Promise<string>((_, reject) => {
-               timeoutId = setTimeout(() => reject(new Error("Caption generation timed out after 60 seconds.")), 60000);
+               // Increased timeout to 180 seconds for large audio files
+               timeoutId = setTimeout(() => reject(new Error("Caption generation timed out after 180 seconds.")), 180000);
             });
             const vtt = await Promise.race([generatePromise, timeoutPromise]);
             clearTimeout(timeoutId);
+            
+            if (!vtt || !vtt.toUpperCase().includes('WEBVTT')) {
+               throw new Error("Model failed to generate a valid WebVTT response.");
+            }
+            
             store.updateBatchItem(item.id, { vttStatus: 'done', vttContent: vtt });
         } catch (e: any) {
+            console.error("VTT processing error:", e);
             store.updateBatchItem(item.id, { vttStatus: 'error', errorMsg: e.message });
         }
 
@@ -168,8 +175,57 @@ export function BatchMode() {
     URL.revokeObjectURL(url);
   };
 
+  const handleAudioUpload = async (files: File[]) => {
+    const newItems: any[] = [];
+    const AUDIO_EXT_REGEX = /\.(mp3|wav|ogg|m4a|aac|flac|opus|webm|aiff|wma)$/i;
+    
+    for (const file of files) {
+      if (file.name.toLowerCase().endsWith('.zip')) {
+        try {
+          const zip = await JSZip.loadAsync(file);
+          const zipFiles = Object.keys(zip.files);
+          let index = 0;
+          for (const zipFileName of zipFiles) {
+            const fileName = zipFileName.split('/').pop() || '';
+            // Match audio extensions, ignore directories, and ignore hidden files (starting with .)
+            if (zipFileName.match(AUDIO_EXT_REGEX) && !zip.files[zipFileName].dir && !fileName.startsWith('.')) {
+              const zipFile = zip.files[zipFileName];
+              const blob = await zipFile.async('blob');
+              newItems.push({
+                id: `audio-${Date.now()}-${index++}-${Math.random().toString(36).substr(2, 9)}`,
+                text: fileName.replace(AUDIO_EXT_REGEX, '') || 'Uploaded Audio',
+                wavBlob: blob,
+                vttContent: null,
+                audioStatus: 'done',
+                vttStatus: 'idle'
+              });
+            }
+          }
+        } catch (e) {
+          console.error("Failed to parse zip", e);
+        }
+      } else if (file.type.startsWith('audio/') || file.name.match(AUDIO_EXT_REGEX)) {
+        newItems.push({
+          id: `audio-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+          text: file.name.replace(AUDIO_EXT_REGEX, '') || 'Uploaded Audio',
+          wavBlob: file,
+          vttContent: null,
+          audioStatus: 'done',
+          vttStatus: 'idle'
+        });
+      }
+    }
+
+    if (newItems.length > 0) {
+      store.setBatchItems(prev => [...prev, ...newItems]);
+    }
+  };
+
   const totalAudioProcessed = store.batchItems.filter(i => i.audioStatus === 'done' || i.audioStatus === 'error').length;
+  const totalAudioDone = store.batchItems.filter(i => i.audioStatus === 'done').length;
   const totalVttProcessed = store.batchItems.filter(i => i.vttStatus === 'done' || i.vttStatus === 'error').length;
+  const totalVttDone = store.batchItems.filter(i => i.vttStatus === 'done').length;
+  const vttProcessableCount = store.batchItems.filter(i => !!i.wavBlob).length;
   const isAnyProcessing = store.isBatchProcessingAudio || store.isBatchProcessingVtt;
 
   const rpmLimit = 5;
@@ -183,8 +239,45 @@ export function BatchMode() {
         </h2>
 
         {store.batchItems.length === 0 ? (
-          <div className="flex-1 flex items-center justify-center text-slate-500 text-sm">
-             Upload a .txt file in the left panel to begin.
+          <div className="flex-1 flex flex-col items-center justify-center gap-6">
+             <div className="text-slate-500 text-sm max-w-xs text-center leading-relaxed">
+                Upload a .txt file to generate speech, or upload existing audio files to generate captions.
+             </div>
+             
+             <div className="grid grid-cols-3 gap-3 w-full max-w-md">
+                <label className="bg-slate-800/50 border border-slate-700/50 hover:bg-slate-800 text-slate-300 py-6 rounded-xl font-bold uppercase tracking-widest text-[9px] transition-colors cursor-pointer flex flex-col items-center gap-3 text-center px-2 shadow-lg group">
+                   <Upload className="w-6 h-6 text-emerald-500 group-hover:scale-110 transition-transform" />
+                   <span>Audio Files</span>
+                   <input 
+                     type="file" 
+                     className="hidden" 
+                     multiple 
+                     accept="audio/*" 
+                     onChange={(e) => e.target.files && handleAudioUpload(Array.from(e.target.files))}
+                   />
+                </label>
+                <label className="bg-slate-800/50 border border-slate-700/50 hover:bg-slate-800 text-slate-300 py-6 rounded-xl font-bold uppercase tracking-widest text-[9px] transition-colors cursor-pointer flex flex-col items-center gap-3 text-center px-2 shadow-lg group">
+                   <Folder className="w-6 h-6 text-emerald-500 group-hover:scale-110 transition-transform" />
+                   <span>Folder</span>
+                   <input 
+                     type="file" 
+                     className="hidden" 
+                     multiple 
+                     {...{ webkitdirectory: "", directory: "" } as any}
+                     onChange={(e) => e.target.files && handleAudioUpload(Array.from(e.target.files))}
+                   />
+                </label>
+                <label className="bg-slate-800/50 border border-slate-700/50 hover:bg-slate-800 text-slate-300 py-6 rounded-xl font-bold uppercase tracking-widest text-[9px] transition-colors cursor-pointer flex flex-col items-center gap-3 text-center px-2 shadow-lg group">
+                   <FileArchive className="w-6 h-6 text-emerald-500 group-hover:scale-110 transition-transform" />
+                   <span>ZIP Archive</span>
+                   <input 
+                     type="file" 
+                     className="hidden" 
+                     accept=".zip" 
+                     onChange={(e) => e.target.files && handleAudioUpload(Array.from(e.target.files))}
+                   />
+                </label>
+             </div>
           </div>
         ) : (
           <div className="flex-1 flex flex-col justify-center max-w-lg mx-auto w-full gap-8">
@@ -252,22 +345,88 @@ export function BatchMode() {
 
              {/* Action Buttons */}
              <div className="grid grid-cols-2 gap-4">
-                <button 
-                  onClick={handleStartAudio}
-                  disabled={isAnyProcessing || totalAudioProcessed === store.batchItems.length}
-                  className="bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 hover:bg-emerald-500/20 py-4 rounded-xl font-bold uppercase tracking-widest text-[11px] transition-colors disabled:opacity-50 flex flex-col items-center gap-2"
-                >
-                  <Play className="w-5 h-5 fill-emerald-500/50" />
-                  Run Audio Batch
-                </button>
-                <button 
-                  onClick={handleStartVtt}
-                  disabled={isAnyProcessing || totalVttProcessed === store.batchItems.length}
-                  className="bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 hover:bg-emerald-500/20 py-4 rounded-xl font-bold uppercase tracking-widest text-[11px] transition-colors disabled:opacity-50 flex flex-col items-center gap-2"
-                >
-                  <Play className="w-5 h-5 fill-emerald-500/50" />
-                  Run VTT Batch
-                </button>
+                <div className="flex flex-col gap-2">
+                   <button 
+                     onClick={handleStartAudio}
+                     disabled={isAnyProcessing || totalAudioDone === store.batchItems.length}
+                     className="bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 hover:bg-emerald-500/20 py-4 rounded-xl font-bold uppercase tracking-widest text-[11px] transition-colors disabled:opacity-50 flex-1 flex flex-col items-center justify-center gap-2"
+                   >
+                     <Play className="w-5 h-5 fill-emerald-500/50" />
+                     Run Audio Batch
+                   </button>
+                   <button 
+                     onClick={exportAudioZip}
+                     disabled={isAnyProcessing || !store.batchItems.some(i => i.audioStatus === 'done' && i.wavBlob)}
+                     className="bg-slate-200 text-slate-950 hover:bg-white py-2 rounded-lg font-bold uppercase tracking-widest text-[10px] transition-colors disabled:opacity-50 flex items-center justify-center gap-2 shadow-lg"
+                   >
+                     <Download className="w-3 h-3" /> Export Audio ZIP
+                   </button>
+                </div>
+                <div className="flex flex-col gap-2">
+                  <button 
+                    onClick={() => handleStartVtt(false)}
+                    disabled={isAnyProcessing || (totalVttDone === vttProcessableCount && vttProcessableCount > 0)}
+                    className="bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 hover:bg-emerald-500/20 py-4 rounded-xl font-bold uppercase tracking-widest text-[11px] transition-colors disabled:opacity-50 flex-1 flex flex-col items-center justify-center gap-2"
+                  >
+                    <Play className="w-5 h-5 fill-emerald-500/50" />
+                    Run VTT Batch
+                  </button>
+                  <button 
+                    onClick={exportVttZip}
+                    disabled={isAnyProcessing || !store.batchItems.some(i => i.vttStatus === 'done' && i.vttContent)}
+                    className="bg-slate-200 text-slate-950 hover:bg-white py-2 rounded-lg font-bold uppercase tracking-widest text-[10px] transition-colors disabled:opacity-50 flex items-center justify-center gap-2 shadow-lg"
+                  >
+                    <Download className="w-3 h-3" /> Export VTT ZIP
+                  </button>
+                  <button 
+                    onClick={() => handleStartVtt(true)}
+                    disabled={isAnyProcessing || vttProcessableCount === 0}
+                    className="bg-emerald-500/5 border border-emerald-500/10 text-emerald-500/70 hover:bg-emerald-500/10 py-1.5 rounded-lg font-bold uppercase tracking-widest text-[9px] transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
+                  >
+                    Rerun All VTT
+                  </button>
+                </div>
+             </div>
+
+             {/* Upload Audio Section */}
+             <div className="bg-slate-900/30 border border-slate-800/50 rounded-xl p-4 flex flex-col gap-3">
+               <div className="flex items-center gap-2 text-[10px] text-slate-500 uppercase tracking-widest font-bold mb-1">
+                 <FileAudio className="w-3 h-3" /> Add More Audio
+               </div>
+               <div className="grid grid-cols-3 gap-2">
+                 <label className="bg-slate-800 hover:bg-slate-700 text-slate-300 py-3 rounded-lg font-bold uppercase tracking-widest text-[9px] transition-colors cursor-pointer flex flex-col items-center gap-2 text-center px-1">
+                   <Upload className="w-4 h-4" />
+                   Files
+                   <input 
+                     type="file" 
+                     className="hidden" 
+                     multiple 
+                     accept="audio/*" 
+                     onChange={(e) => e.target.files && handleAudioUpload(Array.from(e.target.files))}
+                   />
+                 </label>
+                 <label className="bg-slate-800 hover:bg-slate-700 text-slate-300 py-3 rounded-lg font-bold uppercase tracking-widest text-[9px] transition-colors cursor-pointer flex flex-col items-center gap-2 text-center px-1">
+                   <Folder className="w-4 h-4" />
+                   Folder
+                   <input 
+                     type="file" 
+                     className="hidden" 
+                     multiple 
+                     {...{ webkitdirectory: "", directory: "" } as any}
+                     onChange={(e) => e.target.files && handleAudioUpload(Array.from(e.target.files))}
+                   />
+                 </label>
+                 <label className="bg-slate-800 hover:bg-slate-700 text-slate-300 py-3 rounded-lg font-bold uppercase tracking-widest text-[9px] transition-colors cursor-pointer flex flex-col items-center gap-2 text-center px-1">
+                   <FileArchive className="w-4 h-4" />
+                   ZIP
+                   <input 
+                     type="file" 
+                     className="hidden" 
+                     accept=".zip" 
+                     onChange={(e) => e.target.files && handleAudioUpload(Array.from(e.target.files))}
+                   />
+                 </label>
+               </div>
              </div>
 
              <div className="flex gap-4">
@@ -276,25 +435,10 @@ export function BatchMode() {
                   disabled={!isAnyProcessing}
                   className="flex-1 bg-slate-800 border border-slate-700 text-red-400 hover:bg-red-500/10 hover:border-red-500/30 py-3 rounded-xl font-bold uppercase tracking-widest text-[11px] transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
                 >
-                  <Square className="w-4 h-4 fill-current" /> Stop
+                  <Square className="w-4 h-4 fill-current" /> Stop Processing
                 </button>
                 
-                <div className="flex-1 grid grid-cols-2 gap-2">
-                  <button 
-                    onClick={exportAudioZip}
-                    disabled={isAnyProcessing || !store.batchItems.some(i => i.audioStatus === 'done' && i.wavBlob)}
-                    className="bg-slate-200 text-slate-950 hover:bg-white py-3 rounded-xl font-bold uppercase tracking-widest text-[11px] transition-colors disabled:opacity-50 flex items-center justify-center gap-2 shadow-lg"
-                  >
-                    <Download className="w-3 h-3" /> Audio ZIP
-                  </button>
-                  <button 
-                    onClick={exportVttZip}
-                    disabled={isAnyProcessing || !store.batchItems.some(i => i.vttStatus === 'done' && i.vttContent)}
-                    className="bg-slate-200 text-slate-950 hover:bg-white py-3 rounded-xl font-bold uppercase tracking-widest text-[11px] transition-colors disabled:opacity-50 flex items-center justify-center gap-2 shadow-lg"
-                  >
-                    <Download className="w-3 h-3" /> VTT ZIP
-                  </button>
-                </div>
+
              </div>
 
           </div>

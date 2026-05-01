@@ -6,7 +6,8 @@ import { BatchMode } from './BatchMode';
 import { AudioVisualizer } from './AudioVisualizer';
 import { 
   Settings, FolderOpen, PlaySquare, Video as VideoIcon, 
-  Mic2, Type, Zap, Plus, X, Save, Trash2, AlertCircle, List, Upload, Text
+  Mic2, Type, Zap, Plus, X, Save, Trash2, AlertCircle, List, Upload, Text,
+  Download, FileAudio
 } from 'lucide-react';
 
 export function Workspace() {
@@ -216,6 +217,71 @@ export function Workspace() {
                                VTT: {item.vttStatus.toUpperCase()}
                              </span>
                            </div>
+                           {(item.wavBlob || item.vttContent) && (
+                             <div className="flex items-center gap-2 mt-2 pt-2 border-t border-slate-800/30">
+                               {item.wavBlob && (
+                                 <button 
+                                   onClick={() => {
+                                     const url = URL.createObjectURL(item.wavBlob!);
+                                     const a = document.createElement('a');
+                                     a.href = url;
+                                     a.download = `audio_${idx + 1}.mp3`;
+                                     document.body.appendChild(a);
+                                     a.click();
+                                     document.body.removeChild(a);
+                                     URL.revokeObjectURL(url);
+                                   }}
+                                   className="p-1 px-2 bg-slate-800 hover:bg-slate-700 rounded text-emerald-400 transition-colors flex items-center gap-1 text-[8px] font-bold uppercase tracking-tighter"
+                                   title="Download Audio"
+                                 >
+                                   <FileAudio className="w-2.5 h-2.5" /> MP3
+                                 </button>
+                               )}
+                               {item.vttContent && (
+                                 <button 
+                                   onClick={() => {
+                                     const blob = new Blob([item.vttContent!], { type: 'text/vtt' });
+                                     const url = URL.createObjectURL(blob);
+                                     const a = document.createElement('a');
+                                     a.href = url;
+                                     a.download = `captions_${idx + 1}.vtt`;
+                                     document.body.appendChild(a);
+                                     a.click();
+                                     document.body.removeChild(a);
+                                     URL.revokeObjectURL(url);
+                                   }}
+                                   className="p-1 px-2 bg-slate-800 hover:bg-slate-700 rounded text-emerald-400 transition-colors flex items-center gap-1 text-[8px] font-bold uppercase tracking-tighter"
+                                   title="Download VTT"
+                                 >
+                                   <VideoIcon className="w-2.5 h-2.5" /> VTT
+                                 </button>
+                               )}
+                               {(item.wavBlob || item.vttContent) && (
+                                 <button 
+                                   onClick={async () => {
+                                     const JSZip = (await import('jszip')).default;
+                                     const zip = new JSZip();
+                                     if (item.wavBlob) zip.file('audio.mp3', item.wavBlob);
+                                     if (item.vttContent) zip.file('captions.vtt', item.vttContent);
+                                     
+                                     const content = await zip.generateAsync({ type: 'blob' });
+                                     const url = URL.createObjectURL(content);
+                                     const a = document.createElement('a');
+                                     a.href = url;
+                                     a.download = `item_${idx + 1}.zip`;
+                                     document.body.appendChild(a);
+                                     a.click();
+                                     document.body.removeChild(a);
+                                     URL.revokeObjectURL(url);
+                                   }}
+                                   className="p-1 px-2 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 rounded transition-colors flex items-center gap-1 text-[8px] font-bold uppercase tracking-tighter ml-auto"
+                                   title="Download Item ZIP"
+                                 >
+                                   <Download className="w-2.5 h-2.5" /> ZIP
+                                 </button>
+                               )}
+                             </div>
+                           )}
                            {item.errorMsg && (
                              <div className="text-red-400/80 leading-normal lowercase normal-case mt-1">{item.errorMsg}</div>
                            )}

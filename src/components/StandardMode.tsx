@@ -99,7 +99,52 @@ export function StandardMode() {
                 }}
                 disabled={!store.wavUrl}
                 className="text-slate-400 hover:text-emerald-400 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center w-10 h-10 rounded-full bg-slate-800/50"
-                title="Download Audio"
+                title="Download Audio (.mp3)"
+              >
+                <FileAudio className="w-4 h-4" />
+              </button>
+
+              <button 
+                onClick={async () => {
+                  if (store.vttContent) {
+                    const blob = new Blob([store.vttContent], { type: 'text/vtt' });
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = `captions_${Date.now()}.vtt`;
+                    document.body.appendChild(a);
+                    a.click();
+                    document.body.removeChild(a);
+                    URL.revokeObjectURL(url);
+                  }
+                }}
+                disabled={!store.vttContent}
+                className="text-slate-400 hover:text-emerald-400 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center w-10 h-10 rounded-full bg-slate-800/50"
+                title="Download VTT (.vtt)"
+              >
+                <Video className="w-4 h-4" />
+              </button>
+
+              <button 
+                onClick={async () => {
+                   const JSZip = (await import('jszip')).default;
+                   const zip = new JSZip();
+                   if (store.audioBlob) zip.file('audio.mp3', store.audioBlob);
+                   if (store.vttContent) zip.file('captions.vtt', store.vttContent);
+                   
+                   const content = await zip.generateAsync({ type: 'blob' });
+                   const url = URL.createObjectURL(content);
+                   const a = document.createElement('a');
+                   a.href = url;
+                   a.download = `enunciate_project_${Date.now()}.zip`;
+                   document.body.appendChild(a);
+                   a.click();
+                   document.body.removeChild(a);
+                   URL.revokeObjectURL(url);
+                }}
+                disabled={!store.wavUrl && !store.vttContent}
+                className="text-slate-400 hover:text-emerald-400 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center w-10 h-10 rounded-full bg-slate-800/50"
+                title="Download All (.zip)"
               >
                 <Download className="w-4 h-4" />
               </button>

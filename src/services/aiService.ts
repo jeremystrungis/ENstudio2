@@ -136,23 +136,28 @@ export async function generateCaptions(
 Listen to this audio and generate exact WebVTT file format captions.
 Format your response exactly as a valid VTT file starting with 'WEBVTT'.
 Include timestamps for the spoken words. Try to split captions into short, readable lines (e.g., 2-4 seconds per cue).
-Return ONLY the raw WebVTT content with no markdown wrapping.`;
+Return ONLY the raw WebVTT content. Do not include any introductory or concluding text.`;
 
   const response = await ai.models.generateContent({
     model: modelString,
-    contents: {
+    contents: [{
       parts: [
         { text: prompt },
         { inlineData: { mimeType, data: base64Data } }
       ]
-    }
+    }]
   });
 
   let text = response.text || '';
   
-  // Clean up markdown code blocks if the model wrapped it
-  if (text.startsWith('```vtt')) text = text.replace('```vtt\n', '').replace('\n```', '');
-  else if (text.startsWith('```')) text = text.replace(/```(.*?)\n/, '').replace('\n```', '');
+  // Clean up markdown code blocks and intro text more aggressively
+  const vttMatch = text.match(/WEBVTT[\s\S]*/i);
+  if (vttMatch) {
+    text = vttMatch[0];
+  }
+  
+  // Also remove trailing markdown if it exists
+  text = text.replace(/```.*/g, '').trim();
 
-  return text.trim();
+  return text;
 }
